@@ -2,8 +2,8 @@
 """
 Monitor Mercado Ads Academy for new certifications.
 Sends Telegram + Email alerts when target certifications appear.
-Repeats alert every run for up to MAX_ALERTS_PER_CERT after first detection.
-Dedupes hits across multiple monitored URLs (1 alert per cert per run).
+Supports multiple Telegram chat IDs and multiple email recipients
+(comma-separated in the respective env vars).
 """
 
 import json
@@ -19,17 +19,17 @@ from zoneinfo import ZoneInfo
 import requests
 
 # ============ CONFIG ============
-# Credentials from environment (see README)
+# Credentials from environment (set as GitHub Secrets)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")   # can be "id1,id2,..."
 
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
-EMAIL_TO = os.environ.get("EMAIL_TO", GMAIL_USER)
+EMAIL_TO = os.environ.get("EMAIL_TO", GMAIL_USER)          # can be "a@x,b@y,..."
 
 # Target certifications (case-insensitive substring match)
 TARGETS = [
-    "Product Ads",
+    "Retail Media Search Expert",
     "Retail Media Insights Strategist",
 ]
 
@@ -41,16 +41,15 @@ URLS = [
 ]
 
 # How many alerts to fire per certification.
-# With cron running every 1 min, this equals ~MAX_ALERTS_PER_CERT minutes
-# of continuous nagging after first detection.
-MAX_ALERTS_PER_CERT = 5
+# With GitHub Actions running every 5 min, 6 alerts = ~30 minutes of nagging.
+# Increase to 12 for ~1h of alerts, 24 for ~2h.
+MAX_ALERTS_PER_CERT = 6
 
 # Timezone for all timestamps in logs and messages
 TZ = ZoneInfo("America/Sao_Paulo")
 
 BASE = Path(__file__).parent
 STATE_FILE = BASE / "state.json"
-LOG_FILE = BASE / "monitor.log"
 
 HEADERS = {
     "User-Agent": (
@@ -73,13 +72,8 @@ def fmt(dt: datetime) -> str:
 
 
 def log(msg: str) -> None:
-    line = f"[{now().strftime('%Y-%m-%d %H:%M:%S %Z')}] {msg}"
-    print(line)
-    try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+    # In GitHub Actions, prints show up directly in the workflow log
+    print(f"[{now().strftime('%Y-%m-%d %H:%M:%S %Z')}] {msg}")
 
 
 def load_state() -> dict:
@@ -121,36 +115,54 @@ def send_telegram(msg: str) -> bool:
     if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
         log("Telegram not configured, skipping.")
         return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": msg,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            },
-            timeout=TIMEOUT,
-        )
-        r.raise_for_status()
-        return True
-    except Exception as e:
-        log(f"Telegram send failed: {e}")
-        return False
+
+    chat_ids = [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
+    all_ok = True
+
+    for chat_id in chat_ids:
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": msg,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": False,
+                },
+                timeout=TIMEOUT,
+            )
+            r.raise_for_status()
+        except Exception as e:
+            log(f"Telegram send failed for chat_id={chat_id}: {e}")
+            all_ok = False
+
+    return all_ok
 
 
 def send_email(subject: str, body: str) -> bool:
     if not (GMAIL_USER and GMAIL_APP_PASSWORD):
         log("Gmail not configured, skipping.")
         return False
+
+    # Support comma-separated list of recipients
+    recipients = [e.strip() for e in EMAIL_TO.split(",") if e.strip()]
+    if not recipients:
+        log("No email recipients configured, skipping.")
+        return False
+
     try:
         msg = MIMEText(body, "plain", "utf-8")
         msg["Subject"] = subject
         msg["From"] = GMAIL_USER
-        msg["To"] = EMAIL_TO
+        # Header "To" is a human-readable string joining all recipients
+        msg["To"] = ", ".join(recipients)
+
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=TIMEOUT) as smtp:
             smtp.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            smtp.sendmail(GMAIL_USER, [EMAIL_TO], msg.as_string())
+            # SMTP recipients argument must be a LIST — this is the actual
+            # delivery envelope. The Gmail API rejects strings with commas.
+            smtp.sendmail(GMAIL_USER, recipients, msg.as_string())
+        log(f"Email sent to {len(recipients)} recipient(s): {recipients}")
         return True
     except Exception as e:
         log(f"Email send failed: {e}")
@@ -198,8 +210,6 @@ def main() -> int:
     found_map = state.setdefault("found", {})
 
     # 1) Collect hits across all URLs, deduped by certification name.
-    #    If the same cert appears on multiple locales, we keep only the
-    #    first URL where it was found — one alert per cert per run.
     hits_by_cert: dict[str, tuple[str, str]] = {}
     for url in URLS:
         try:
@@ -216,7 +226,6 @@ def main() -> int:
         entry = found_map.get(cert)
 
         if entry is None:
-            # First ever detection: alert 1/N
             alert(cert, url, snippet, alert_num=1, total=MAX_ALERTS_PER_CERT)
             found_map[cert] = {
                 "url": url,
@@ -227,7 +236,6 @@ def main() -> int:
             }
             log(f"MATCH (new): '{cert}' at {url}")
         else:
-            # Already known: keep alerting until MAX_ALERTS_PER_CERT
             if entry.get("alert_count", 0) < MAX_ALERTS_PER_CERT:
                 next_num = entry.get("alert_count", 0) + 1
                 alert(cert, url, snippet,
@@ -235,7 +243,6 @@ def main() -> int:
                 entry["last_alert_at"] = now().isoformat()
                 entry["alert_count"] = next_num
                 entry["last_snippet"] = snippet
-            # else: quota reached, stay silent
 
     save_state(state)
 
