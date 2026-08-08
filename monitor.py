@@ -29,7 +29,7 @@ EMAIL_TO = os.environ.get("EMAIL_TO", GMAIL_USER)
 
 # Target certifications (case-insensitive substring match)
 TARGETS = [
-    "Retail Media Search Expert",
+    "Product Ads",
     "Retail Media Insights Strategist",
 ]
 
@@ -43,7 +43,7 @@ URLS = [
 # How many alerts to fire per certification.
 # With cron running every 1 min, this equals ~MAX_ALERTS_PER_CERT minutes
 # of continuous nagging after first detection.
-MAX_ALERTS_PER_CERT = 30
+MAX_ALERTS_PER_CERT = 5
 
 # Timezone for all timestamps in logs and messages
 TZ = ZoneInfo("America/Sao_Paulo")
