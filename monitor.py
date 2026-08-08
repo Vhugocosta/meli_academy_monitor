@@ -29,7 +29,8 @@ EMAIL_TO = os.environ.get("EMAIL_TO", GMAIL_USER)          # can be "a@x,b@y,...
 
 # Target certifications (case-insensitive substring match)
 TARGETS = [
-    "Product Ads",
+       "Retail Media Search Expert",
+       "Retail Media Insights Strategist",
 ]
 
 # Pages to monitor
@@ -42,7 +43,7 @@ URLS = [
 # How many alerts to fire per certification.
 # With GitHub Actions running every 5 min, 6 alerts = ~30 minutes of nagging.
 # Increase to 12 for ~1h of alerts, 24 for ~2h.
-MAX_ALERTS_PER_CERT = 5
+MAX_ALERTS_PER_CERT = 20
 
 # Timezone for all timestamps in logs and messages
 TZ = ZoneInfo("America/Sao_Paulo")
