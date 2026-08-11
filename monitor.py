@@ -30,7 +30,7 @@ EMAIL_TO = os.environ.get("EMAIL_TO", GMAIL_USER)          # can be "a@x,b@y,...
 # Target certifications (case-insensitive substring match)
 TARGETS = [
        "Retail Media Search Expert",
-       "Retail Media Insights Strategist",
+       "Insights Expert",
 ]
 
 # Pages to monitor
